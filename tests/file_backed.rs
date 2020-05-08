@@ -10,7 +10,8 @@ use typenum::consts::U512;
 const FILE_PATH: &'static str = "assets/gpt.img";
 
 const SD_CARD_PATH: &'static str = "/dev/mmcblk0";
-const SD_CARD_SIZE: usize = (16 * 1024 * 1024 * 1024) / 512;
+// const SD_CARD_SIZE: usize = (16 * 1024 * 1024 * 1024) / 512;
+const SD_CARD_SIZE: usize = 31_449_088;
 
 fn read_sector_one(mut storage: FileBackedStorage) {
     eprintln!("size in:\n  - sectors: {:#X}\n  - words: {:#X}\n  - bytes: {:#X} ({}) (2 ** {})",

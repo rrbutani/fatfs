@@ -23,4 +23,4 @@ pub mod bindings;
 pub mod mutex;
 use mutex::Mutex;
 
-pub mod storage;
+use storage_traits::Storage;
