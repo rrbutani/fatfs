@@ -20,3 +20,7 @@ macro_rules! using_std { ($($i:item)*) => ($(#[cfg(not(feature = "no_std"))]$i)*
 #[cfg(feature = "bindings")]
 pub mod bindings;
 
+pub mod mutex;
+use mutex::Mutex;
+
+pub mod storage;
