@@ -53,7 +53,7 @@ dependencies = [
  "bare-metal",
  "cfg-if",
  "cortex-m",
- "generic-array 0.13.2",
+ "generic-array 0.14.1",
  "storage-traits",
  "typenum",
 ]
@@ -72,6 +72,15 @@ name = "generic-array"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ed1e761351b56f54eb9dcd0cfaca9fd0daecf93918e1cfc01c8a3d26ee7adcd"
+dependencies = [
+ "typenum",
+]
+
+[[package]]
+name = "generic-array"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d2664c2cf08049036f31015b04c6ac3671379a1d86f52ed2416893f16022deb"
 dependencies = [
  "typenum",
 ]
@@ -109,9 +118,9 @@ checksum = "dba1a27d3efae4351c8051072d619e3ade2820635c3958d826bfea39d59b54c8"
 [[package]]
 name = "storage-traits"
 version = "0.0.0"
-source = "git+ssh://git@github.com/rrbutani/storage-traits.git#da5ceac31ee13bbdc379bdfd5757dca472167b50"
+source = "git+ssh://git@github.com/rrbutani/storage-traits.git#d494e478c30197cf0c33f82e41e4bf385cedd753"
 dependencies = [
- "generic-array 0.13.2",
+ "generic-array 0.14.1",
  "typenum",
 ]
 

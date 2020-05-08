@@ -12,9 +12,9 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 typenum = "1.12.0"
-generic-array = "0.13.2"
+generic-array = "0.14.1"
 cfg-if = "0.1.10"
-storage-traits = { version = "0.0.0", git = "ssh://git@github.com/rrbutani/storage-traits.git" }
+storage-traits = { version = "0.0.0", git = "ssh://git@github.com/rrbutani/storage-traits.git", default-features = false }
 
 [target.'cfg(target_arch = "arm")'.dependencies]
 bare-metal = "0.2.5" # In a perfect world this'd be disabled on feat(external_mutex)
@@ -27,7 +27,7 @@ lto = "fat"
 
 [features]
 default = ["bindings", "no_std", "external_mutex"]
-no_std = []
+no_std = ["storage-traits/no_std"]
 bindings = []
 external_mutex = []
 
