@@ -1,0 +1,9 @@
+# tlt takes care of this now.
+# [build]
+# target = "thumbv7em-none-eabihf" # Cortex-M4F and Cortex-M7F (with FPU)
+
+# When not building for a hosted platform (i.e. when not testing); just spit out
+# bitcode.
+# Update: tlt should take care of this now.
+# [target.'cfg(all(target_os = "none"))']
+# rustflags = ["-Clinker-plugin-lto"]

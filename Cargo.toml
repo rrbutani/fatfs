@@ -1,0 +1,16 @@
+[package]
+name = "fs"
+version = "0.1.0"
+authors = ["Rahul Butani <rr.butani@gmail.com>", "jspspike <jspspike@gmail.com>"]
+edition = "2018"
+publish = false
+
+[lib]
+# We use this in C (staticlib) and in other Rust programs (statically, so: rlib)
+crate-type = ["staticlib", "rlib"]
+# crate-type = ["staticlib"]
+
+[dependencies]
+typenum = "1.12.0"
+generic-array = "0.13.2"
+cfg-if = "0.1.10"

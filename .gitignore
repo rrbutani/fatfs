@@ -1,0 +1,7 @@
+# Test Data:
+assets
+
+# The way this repo gets used is a little weird so we're going to not ignore
+# this file for now.
+# Cargo.lock
+target
