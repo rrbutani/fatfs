@@ -26,3 +26,4 @@ use mutex::Mutex;
 use storage_traits::Storage;
 
 pub mod gpt;
+pub mod fat;
