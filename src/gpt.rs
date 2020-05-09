@@ -4,9 +4,13 @@
 //! all the fields/functionality in GPT. Right now we pretty much just have
 //! exactly what we need for single partition disks.
 
+// Another TODO: relax the 512B sector size restriction in this file.
+
+// TODO: switch from pub(crate) to pub, I think
+
 use super::Storage;
 
-use storage_traits::errors::{ReadError, WriteError};
+use storage_traits::errors::WriteError;
 use generic_array::GenericArray;
 use typenum::consts::U512;
 
@@ -99,41 +103,41 @@ impl Debug for Guid {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Descriptions sourced from [here](https://en.wikipedia.org/wiki/GUID_Partition_Table#Partition_entries_(LBA_2%E2%80%9333)).
 pub struct Gpt {
-    revision: u32,
+    pub(crate) revision: u32,
     /// Header size in little endian (usually 92 bytes).
-    header_size: u32,
+    pub(crate) header_size: u32,
     /// CRC32 of the start of the header up to [`header_size`].
-    header_crc32: u32,
-    current_lba: u64,
-    backup_lba: u64,
+    pub(crate) header_crc32: u32,
+    pub(crate) current_lba: u64,
+    pub(crate) backup_lba: u64,
     /// First usable LBA for partitions (primary partition table last LBA + 1)
-    first_usable_lba: u64,
+    pub(crate) first_usable_lba: u64,
     /// Last usable LBA (secondary partition table first LBA − 1)
-    last_usable_lba: u64,
+    pub(crate) last_usable_lba: u64,
     /// Disk GUID in mixed endian.
-    disk_guid: Guid,
+    pub(crate) disk_guid: Guid,
     /// Starting LBA of array of partition entries (always 2 in primary copy).
-    partition_entries_starting_lba: u64,
+    pub(crate) partition_entries_starting_lba: u64,
     /// Number of partition entries in array.
-    num_partition_entries: u32,
+    pub(crate) num_partition_entries: u32,
     /// Size of a single partition entry (usually 128 bytes).
-    partition_entry_size: u32,
+    pub(crate) partition_entry_size: u32,
     /// CRC32 of partition entries array in little endian.
-    partition_entries_crc32: u32,
+    pub(crate) partition_entries_crc32: u32,
 }
 
 #[derive(Clone)]
 pub struct PartitionEntry {
-    partition_type: Guid,
-    unique_guid: Guid,
+    pub(crate) partition_type: Guid,
+    pub(crate) unique_guid: Guid,
     // Little endian
-    first_lba: u64,
+    pub(crate) first_lba: u64,
     // Little endian, inclusive (usually odd)
-    last_lba: u64,
+    pub(crate) last_lba: u64,
     // bit 60 denotes read only
-    attribute_flags: u64,
+    pub(crate) attribute_flags: u64,
     // UTF-16 LE.
-    name: [u16; 36],
+    pub(crate) name: [u16; 36],
 }
 
 impl Debug for PartitionEntry {
