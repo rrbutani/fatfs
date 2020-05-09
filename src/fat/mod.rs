@@ -12,6 +12,8 @@ use core::marker::PhantomData;
 use core::convert::TryInto;
 
 pub mod boot_sector;
+pub mod table;
+pub mod dir;
 
 // Another TODO: relax the 512B sector size restriction in this file.
 
@@ -72,4 +74,59 @@ impl</*'s, */S: Storage<Word = u8, SECTOR_SIZE = U512>> FatFs</*'s, */S> {
         Ok(BootSector::read(&sector))
     }
 
+    pub fn next_free_cluster(&mut self, s: &mut S, arr: &mut GenericArray<u8, U512>) -> Result<table::Cluster, ()> {
+        let mut current_sector_idx = None;
+        let num_clusters = self.fat_table_size_in_sectors * ((self.sector_size_in_bytes as u32) / 4);
+
+        // Rather than attempt to free up space or detect when we're at full
+        // capacity or do _anything_ intelligent, this will simply spin if we're
+        // full.
+        loop {
+            let (sector, offset) = table::cluster_idx_to_fat_sector_and_offset(
+                self.fat_starting_sector,
+                self.sector_size_in_bytes,
+                self.next_known_free_cluster,
+            );
+
+            if current_sector_idx != Some(sector) {
+                s.read_sector(sector as usize, arr).unwrap();
+                current_sector_idx = Some(sector);
+            }
+
+            let next = table::Cluster::from_le_bytes(arr[offset as usize .. (offset + 4) as usize].try_into().unwrap());
+
+            if table::FatEntry::from(next) == table::FatEntry::FREE {
+                // Mark this cluster as the end of a chain:
+                let bytes = table::FatEntry::END_OF_CHAIN.next.to_le_bytes();
+
+                // TODO: use memcpy or something
+                arr[(offset as usize) + 0] = bytes[0];
+                arr[(offset as usize) + 1] = bytes[1];
+                arr[(offset as usize) + 2] = bytes[2];
+                arr[(offset as usize) + 3] = bytes[3];
+
+                // Write out the sector:
+                s.write_sector(current_sector_idx.unwrap() as usize, arr).unwrap();
+
+                let cluster = self.next_known_free_cluster;
+
+                self.next_known_free_cluster = (self.next_known_free_cluster + 1) % num_clusters;
+
+                break Ok(cluster);
+            }
+
+            // If that didn't work, onto the next!
+            self.next_known_free_cluster = (self.next_known_free_cluster + 1) % num_clusters;
+        }
+    }
+
+    pub fn format(_storage: &/*'s*/ mut S, partition: &PartitionEntry) -> Result<Self, ()> {
+        if partition.partition_type != Guid::microsoft_basic_data() {
+            return Err(());
+        }
+
+        todo!();
+
+        // Self::mount(storage, partition)
+    }
 }
