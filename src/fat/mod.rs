@@ -11,6 +11,9 @@ use typenum::consts::U512;
 use core::marker::PhantomData;
 use core::convert::TryInto;
 
+pub mod cache;
+pub mod types;
+
 pub mod boot_sector;
 pub mod table;
 pub mod dir;
