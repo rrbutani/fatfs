@@ -154,3 +154,189 @@ impl Ord for CacheEntry {
 
 impl Default for CacheEntry { fn default() -> Self { CacheEntry::Free } }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[allow(non_camel_case_types)]
+pub struct CacheTable<SIZE: ArrayLength<CacheEntry>> {
+    // To help make cache lookups faster, we keep this in sorted order.
+    cache_entry_table: GenericArray<CacheEntry, SIZE>,
+
+    length: usize,
+}
+
+impl<S: ArrayLength<CacheEntry>> CacheTable<S> {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    pub fn capacity() -> usize {
+        S::to_usize()
+    }
+
+    pub fn len(&self) -> usize {
+        self.length
+    }
+
+    pub fn free_entries(&self) -> usize {
+        Self::capacity() - self.len()
+    }
+
+    pub fn get(&self, s: SectorIdx) -> Option<&CacheEntry> {
+        let entry = CacheEntry::new_for_lookup(s);
+        self.cache_entry_table
+            .as_slice()
+            .binary_search(&entry)
+            .ok()
+            .map(|idx| &self.cache_entry_table.as_slice()[idx])
+    }
+
+    pub fn get_mut(&mut self, s: SectorIdx) -> Option<&mut CacheEntry> {
+        // Basically the same as the above save for the as_mut_slice calls.
+        // Blame the borrow checker for the asymmetry.
+
+        let entry = CacheEntry::new_for_lookup(s);
+        match self.cache_entry_table
+            .as_mut_slice()
+            .binary_search(&entry)
+            .ok() {
+            Some(idx) => Some(&mut self.cache_entry_table[idx]),
+            None => None,
+        }
+    }
+
+    /// All newly inserted entries are marked as resident.
+    ///
+    /// Returns an `Err(Some(_))` if the table already contains an entry with
+    /// the sector in question.
+    ///
+    /// Returns an `Err(None)` if we're out of space!
+    pub fn insert(&mut self,
+        s: Sector,
+        idx: usize,
+        counter: &u64,
+    ) -> Result<&mut CacheEntry, Option<&mut CacheEntry>> {
+        let entry = CacheEntry::new(s, idx, counter);
+        match self.cache_entry_table.binary_search(&entry) {
+            // If the sector is already in the table, return it's entry:
+            Ok(idx) => {
+                Err(Some(&mut self.cache_entry_table.as_mut_slice()[idx]))
+            },
+
+            Err(idx) => {
+                // If it's not present, we were just told where to place this
+                // entry.
+
+                // First let's make sure we have room for it:
+                if self.free_entries() == 0 {
+                    return Err(None);
+                }
+
+                // Just to be extra sure, double check that the last element
+                // really is free (since we're only adding one thing we only
+                // need to check the last element):
+                match self.cache_entry_table.as_slice().last() {
+                    Some(last) => {
+                        assert!(last == &CacheEntry::Free)
+                    },
+                    None => {
+                        // Zero does satisfy the `Unsigned` trait so it's
+                        // possible to construct an instance of this type with
+                        // SIZE = 0, but the above check (free_entries >= 1)
+                        // should catch this.
+                        unreachable!()
+                    },
+                }
+
+                // Now, shift everything at and after the index we were told to
+                // insert into one place to the right. Note that we stop at
+                // self.length() because there's no reason we need to bother
+                // copying empty elements.
+                self.cache_entry_table.copy_within(idx..(self.length), idx + 1);
+
+                // Increment our length:
+                self.length += 1;
+
+                // And finally, put our new element into place and return it.
+                let slot = &mut self.cache_entry_table[idx];
+                *slot = entry;
+                Ok(slot)
+            }
+        }
+    }
+
+    /// Tries to remove an entry with the given sector.
+    ///
+    /// Returns `Ok(arr_idx)` if the entry was successfully removed.
+    ///
+    /// Returns `Err(Some(_))` if the entry exists but is marked as dirty.
+    ///
+    /// Returns `Err(None)` if an entry for the sector does not exist.
+    pub fn remove(
+        &mut self,
+        s: SectorIdx
+    ) -> Result<usize, Option<&mut CacheEntry>> {
+        use CacheEntry::*;
+
+        let entry = CacheEntry::new_for_lookup(s);
+        match self.cache_entry_table.binary_search(&entry) {
+            Ok(idx) => {
+                match self.cache_entry_table[idx] {
+                    Resident { arr_idx, .. } => {
+                        // Move the remaining entries left one.
+                        //
+                        // | a | b | c | E | e | f | _ | _ | _ | _ |
+                        //                  \     /
+                        //                  copy to:
+                        //                     |
+                        //                 /---/
+                        //                 V
+                        //              /     \
+                        // | a | b | c | E | e | f | _ | _ | _ | _ |
+                        // | a | b | c | e | f | f | _ | _ | _ | _ |
+                        //
+                        // And then zero the last element:
+                        // | a | b | c | e | f | f | _ | _ | _ | _ |
+                        //
+                        //                   |
+                        //                   V
+                        //
+                        // | a | b | c | e | f | _ | _ | _ | _ | _ |
+                        //
+                        // This works even when there are no following entries.
+
+                        self.cache_entry_table
+                            .copy_within((idx + 1)..(self.length), idx);
+
+                        self.length -= 1;
+                        self.cache_entry_table[self.length] = CacheEntry::Free;
+
+                        Ok(arr_idx)
+                    },
+
+                    // If it's dirty, error:
+                    Dirty { .. } => Err(Some(&mut self.cache_entry_table[idx])),
+
+                    // This can't happen; lookup _can't_ return a Free sector.
+                    Free => unreachable!(),
+                }
+            },
+
+            Err(_) => {
+                // If a corresponding Entry is not present, error:
+                Err(None)
+            }
+        }
+    }
+
+    /// Calls a function on every dirty `CacheEntry`.
+    pub fn for_each_dirty_entry<E, F: FnMut((usize, &mut CacheEntry)) -> Result<(), E>>(
+        &mut self,
+        func: F,
+    ) -> Result<(), E> {
+        self.cache_entry_table.iter_mut()
+            .enumerate()
+            .filter(|(_, e)| e.is_dirty())
+            .map(func)
+            .collect()
+    }
+}
+
