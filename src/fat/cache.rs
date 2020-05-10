@@ -340,3 +340,207 @@ impl<S: ArrayLength<CacheEntry>> CacheTable<S> {
     }
 }
 
+// #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+// pub enum EvictionPolicy {
+//     Oldest,
+//     Youngest,
+//     MostRecentlyAccessed,
+//     LeastRecentlyAccessed,
+//     UnmodifiedThenOldestModified,
+//     UnmodifiedThenYoungestModified,
+// }
+
+pub trait EvictionPolicy {
+    /// Pick which cache entry, between the two given, you'd rather evict.
+    ///
+    /// Implementors are encouraged to use an ordering that is _asymmetric_,
+    /// _transitive_, and _total_.
+    ///
+    /// This is basically [`Ord`].
+    ///
+    /// This only takes &self to be object safe.
+    fn compare(&self, a: &CacheEntry, b: &CacheEntry) -> Ordering;
+
+    /// Returns `None` if there are no elements in the array.
+    fn pick_entry_to_evict(&self, arr: &[CacheEntry]) -> Option<(usize, &CacheEntry)> {
+        arr.iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| self.compare(a, b))
+            // .map(|(idx, entry)| (idx, *entry))
+    }
+}
+
+impl EvictionPolicy for &dyn EvictionPolicy {
+    #[inline]
+    fn compare(&self, a: &CacheEntry, b: &CacheEntry) -> Ordering {
+
+    }
+}
+
+pub mod eviction_policies {
+    use super::{CacheEntry::{self, *}, Ordering, EvictionPolicy};
+
+    macro_rules! policy {
+        ($name:ident ($instance:ident): $($arms:tt)*) => {
+            #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord,
+                Hash, Default
+            )]
+            pub struct $name;
+            pub static $instance: dyn EvectionPolicy = $name;
+
+            impl EvictionPolicy for $name {
+                fn compare(&self, a: &CacheEntry, b: &CacheEntry) -> Ordering {
+                    match (a, b) {
+                        $($arms)*
+
+                        (Free, Resident { .. }) |
+                        (Free, Dirty { .. }) => Ordering::Greater,
+
+                        (Resident { .. }, Free) |
+                        (Dirty { .. }, Free) => Ordering::Less,
+                    }
+                }
+            }
+        };
+
+        (<$inner:ident as $instance:ident> $name:ident with ($a:ident, $b:ident): $($arms:tt)*) => {
+            #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord,
+                Hash, Default
+            )]
+            pub struct $name<$inner: EvectionPolicy>($inner);
+
+            impl<$inner: EvictionPolicy> EvictionPolicy for $name<$inner> {
+                fn compare(&self, $a: &CacheEntry, $b: &CacheEntry) -> Ordering {
+                    let $instance: $inner = self.0;
+
+                    match ($a, $b) {
+                        $($arms)*
+
+                        (Free, Resident { .. }) |
+                        (Free, Dirty { .. }) => Ordering::Greater,
+
+                        (Resident { .. }, Free) |
+                        (Dirty { .. }, Free) => Ordering::Less,
+                    }
+                }
+            }
+        };
+    }
+
+    // pub struct Youngest;
+    // pub static YOUNGEST: dyn EvectionPolicy = Youngest;
+    // impl EvictionPolicy for Youngest {
+    //     fn compare(&self, a: &CacheEntry, b: &CacheEntry) -> Ordering {
+    //         match (a, b) {
+    //             (Resident { age: a, .. }, Resident { age: b, .. }) |
+    //             (Resident { age: a, .. }, Dirty { age: b, .. }) |
+    //             (Dirty { age: a, .. }, Resident { age: b, .. }) |
+    //             (Dirty { age: a, .. }, Dirty { age: b, .. }) => a.cmp(b),
+
+    //             (Free, Resident { .. }) |
+    //             (Free, Dirty { .. }) => Ordering::Greater,
+
+    //             (Resident { .. }, Free) |
+    //             (Dirty { .. }, Free) => Ordering::Less,
+    //         }
+    //     }
+    // }
+
+    policy! { Youngest (YOUNGEST):
+        (Resident { age: a, .. }, Resident { age: b, .. }) |
+        (Resident { age: a, .. }, Dirty { age: b, .. }) |
+        (Dirty { age: a, .. }, Resident { age: b, .. }) |
+        (Dirty { age: a, .. }, Dirty { age: b, .. }) => a.cmp(b),
+    }
+
+    // pub struct Oldest;
+    // Unfortunately, because of the (Free, _) and (_, Free) cases this can't
+    // just be `Youngest::cmp(_, _).reverse()`.
+    policy! { Oldest (OLDEST):
+        (Resident { age: a, .. }, Resident { age: b, .. }) |
+        (Resident { age: a, .. }, Dirty { age: b, .. }) |
+        (Dirty { age: a, .. }, Resident { age: b, .. }) |
+        (Dirty { age: a, .. }, Dirty { age: b, .. }) => a.cmp(b).reverse(),
+    }
+
+    //     MostRecentlyAccessed,
+    //     LeastRecentlyAccessed,
+    //     UnmodifiedThenOldestModified,
+    //     UnmodifiedThenYoungestModified,
+
+    policy! { MostRecentlyAccessed (MOST_RECENTLY_ACCESSED):
+        (Resident { last_accessed: a, .. }, Resident { last_accessed: b, .. }) |
+        (Resident { last_accessed: a, .. }, Dirty { last_accessed: b, .. }) |
+        (Dirty { last_accessed: a, .. }, Resident { last_accessed: b, .. }) |
+        (Dirty { last_accessed: a, .. }, Dirty { last_accessed: b, .. }) => a.get().cmp(b.get()),
+    }
+
+    policy! { LeastRecentlyAccessed (LEAST_RECENTLY_ACCESSED):
+        (Resident { last_accessed: a, .. }, Resident { last_accessed: b, .. }) |
+        (Resident { last_accessed: a, .. }, Dirty { last_accessed: b, .. }) |
+        (Dirty { last_accessed: a, .. }, Resident { last_accessed: b, .. }) |
+        (Dirty { last_accessed: a, .. }, Dirty { last_accessed: b, .. }) => a.get().cmp(b.get()).reverse(),
+    }
+
+    policy! { <Inner as inner> UnmodifiedFirst with (a, b):
+        (Resident { .. }, Dirty { .. }) => Ordering::Greater,
+        (Dirty { .. }, Resident { .. }) => Ordering::Less,
+
+        (Resident { .. }, Resident { .. }) |
+        (Dirty { .. }, Dirty { .. }) => inner.cmp(a, b),
+    }
+
+    /// Prefers unmodified entries over modified entries, with entry age being
+    /// used as a tiebreaker (younger entries are picked over older ones).
+    pub static UNMODIFIED_THEN_YOUNGEST: dyn EvectionPolicy =
+        UnmodifiedFirst<YOUNGEST>(YOUNGEST);
+
+    /// Prefers unmodified entries over modified entries, with entry age being
+    /// used as a tiebreaker (older entries are picked over younger ones).
+    pub static UNMODIFIED_THEN_OLDEST: dyn EvectionPolicy =
+        UnmodifiedFirst<Oldest>(Oldest);
+
+    /// Prefers unmodified entries over modified entries, with last entry access
+    /// being used as a tiebreaker (more recently accessed entries are
+    /// preferred).
+    pub static UNMODIFIED_THEN_MOST_RECENTLY_ACCESSED: dyn EvictionPolicy =
+        UnmodifiedFirst<MostRecentlyAccessed>(MostRecentlyAccessed);
+
+    /// Prefers unmodified entries over modified entries, with last entry access
+    /// being used as a tiebreaker (less recently accessed entries are
+    /// preferred).
+    pub static UNMODIFIED_THEN_LEAST_RECENTLY_ACCESSED: dyn EvictionPolicy =
+        UnmodifiedFirst<LeastRecentlyAccessed>(LeastRecentlyAccessed);
+
+    policy! { <Inner as inner> ModifiedFirst with (a, b):
+        (Dirty { .. }, Resident { .. }) => Ordering::Greater,
+        (Resident { .. }, Dirty { .. }) => Ordering::Less,
+
+        (Resident { .. }, Resident { .. }) |
+        (Dirty { .. }, Dirty { .. }) => inner.cmp(a, b),
+    }
+
+    /// Prefers modified entries over unmodified entries, with entry age being
+    /// used as a tiebreaker (younger entries are picked over older ones).
+    pub static MODIFIED_THEN_YOUNGEST: dyn EvectionPolicy =
+        ModifiedFirst<YOUNGEST>(YOUNGEST);
+
+    /// Prefers modified entries over unmodified entries, with entry age being
+    /// used as a tiebreaker (older entries are picked over younger ones).
+    pub static MODIFIED_THEN_OLDEST: dyn EvectionPolicy =
+        ModifiedFirst<Oldest>(Oldest);
+
+    /// Prefers modified entries over unmodified entries, with last entry access
+    /// being used as a tiebreaker (more recently accessed entries are
+    /// preferred).
+    pub static MODIFIED_THEN_MOST_RECENTLY_ACCESSED: dyn EvictionPolicy =
+        ModifiedFirst<MostRecentlyAccessed>(MostRecentlyAccessed);
+
+    /// Prefers modified entries over unmodified entries, with last entry access
+    /// being used as a tiebreaker (less recently accessed entries are
+    /// preferred).
+    pub static MODIFIED_THEN_LEAST_RECENTLY_ACCESSED: dyn EvictionPolicy =
+        ModifiedFirst<LeastRecentlyAccessed>(LeastRecentlyAccessed);
+
+}
+
