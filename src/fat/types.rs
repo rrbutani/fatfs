@@ -9,6 +9,9 @@ macro_rules! newtype {
         pub mod $m {
             use core::ops::{Deref, DerefMut};
 
+            // TODO: make the debug impl print out the name of the wrapper and the
+            // inner type.
+
             // Doing this gives us bounded impls for this traits for free (i.e.
             // `Newtype<Inner>` will be `Copy` only if `Inner` is `Copy`.)
             //
@@ -41,7 +44,7 @@ macro_rules! newtype {
 
         $(
             impl $name {
-                pub fn $c(inner: $inner) -> Self {
+                pub const fn $c(inner: $inner) -> Self {
                     Self(inner)
                 }
             }

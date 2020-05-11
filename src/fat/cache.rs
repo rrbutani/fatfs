@@ -11,6 +11,7 @@ use core::cell::{RefCell, RefMut, Ref};
 use core::cmp::Ordering;
 use core::marker::PhantomData;
 use core::ops::{Index, IndexMut};
+use core::fmt::{self, Debug};
 
 /// Counter type with interior mutability that implements `Copy`
 /// (unlike `Cell<u64>`).
@@ -567,7 +568,7 @@ where
     cache_table: CacheTable<CACHE_SIZE_IN_SECTORS>,
     cache_bitmap: BitMap<CACHE_SIZE_IN_SECTORS>,
 
-    max_sector_idx: SectorIdx,
+    num_sectors: SectorIdx,
 
     eviction_policy: Eviction,
     counter: RefCell<u64>,
@@ -589,13 +590,13 @@ where
         SECT_SIZE::to_usize() * CACHE_SIZE::to_usize()
     }
 
-    pub fn new(_witness: &S, max_sector_idx: SectorIdx, ev: Ev) -> Self {
+    pub fn new(_witness: &S, num_sectors: SectorIdx, ev: Ev) -> Self {
         Self {
             cached_sectors: Default::default(),
             cache_table: CacheTable::new(),
             cache_bitmap: BitMap::new(),
 
-            max_sector_idx,
+            num_sectors,
 
             eviction_policy: ev,
             counter: RefCell::new(0),
@@ -831,7 +832,9 @@ where
     fn get_inner(&self, index: SectorIdx, mark_as_dirty: bool) -> usize {
         let (mut sector_cache, mut storage) = self.refs();
 
-        let (mut cache_entry, mut counter) =
+        assert!(index < sector_cache.num_sectors);
+
+        let (cache_entry, mut counter) =
             sector_cache.get_sector_entry(&mut storage, index);
 
         // Mark the entry as accessed.

@@ -3,9 +3,11 @@
 //! Majority of the docs here are sourced from [this page](https://en.wikipedia.org/wiki/Design_of_the_FAT_file_system).
 
 // We only support the FAT32 variants so expect 25 byte DOS 3.31 BIOS Parameter
-// Blocks (BPBs).
+// Blocks (BPBs) with the extensions (?).
 
 // Another TODO: relax the 512B sector size restriction in this file.
+
+use super::types::SectorIdx;
 
 use generic_array::GenericArray;
 use typenum::consts::U512;
