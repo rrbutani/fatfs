@@ -23,6 +23,8 @@ use types::{SectorIdx, ClusterIdx};
 pub mod boot_sector;
 pub mod table;
 pub mod dir;
+use dir::{DirEntry, DirIter};
+
 pub mod file;
 
 const FAT_ENTRY_SIZE_IN_BYTES: u16 = 4;
@@ -201,6 +203,47 @@ where
 
             // If that didn't work, onto the next!
             self.next_known_free_cluster = ClusterIdx::new((self.next_known_free_cluster.inner() + 1) % num_clusters);
+        }
+    }
+
+    pub fn lookup_path(&mut self, s: &mut S, path: &[u8]) -> Result<((ClusterIdx, u32), DirEntry), ()> {
+        let mut dir_cluster = self.root_dir_cluster_num;
+        let mut dir_entry = None;
+
+        for path_segment in path.split(|c| *c == '/' as u8) {
+            if path_segment.len() == 0 { continue; }
+
+            let mut p = path_segment.split(|c| *c == '.' as u8);
+            let name = p.next().unwrap();
+            let ext = p.next();
+
+            dir_entry = None;
+
+            for (m, dir) in DirIter::from_cluster(dir_cluster, self, s) {
+                if name.iter().take(8).enumerate().all(|(idx, c)| {
+                    dir.file_name.0[idx] == c.to_ascii_uppercase()
+                }) && if let Some(ext) = ext {
+                    ext.iter().take(3).enumerate().all(|(idx, c)| {
+                        dir.file_ext.0[idx] == c.to_ascii_uppercase()
+                    })
+                } else { true } {
+                    // if the file name matches, this is now dir_cluster:
+                    dir_cluster = dir.cluster_idx();
+                    dir_entry = Some((m, dir));
+
+                    break;
+                }
+            }
+
+            if dir_entry.is_none() {
+                return Err(());
+            }
+        }
+
+        if let Some(dir_entry) = dir_entry {
+            Ok(dir_entry)
+        } else {
+            Err(())
         }
     }
 
