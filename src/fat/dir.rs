@@ -131,7 +131,7 @@ impl AttributeSet {
 
 #[repr(transparent)]
 #[derive(Clone, PartialEq, Eq, Default)]
-pub struct FileName([u8; 8]);
+pub struct FileName(pub [u8; 8]);
 
 impl Debug for FileName {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -160,7 +160,7 @@ impl FileName {
 
 #[repr(transparent)]
 #[derive(Clone, PartialEq, Eq, Default)]
-pub struct FileExt([u8; 3]);
+pub struct FileExt(pub [u8; 3]);
 
 impl Debug for FileExt {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -349,6 +349,23 @@ impl DirEntry {
             Err(self)
         }
     }
+
+    // pub fn delete_recursively<'f, 's, S, CS, Ev>(
+    //     &self,
+    //     fs: &'f mut FatFs<S, CS, Ev>,
+    //     s: &'s mut S,
+    // ) -> Result<(), ()>
+    // where
+    //     S: Storage<Word = u8, SECTOR_SIZE = U512>,
+    //     CS: ArrayLength<RefCell<GenericArray<u8, U512>>>,
+    //     CS: ArrayLength<super::cache::CacheEntry>,
+    //     CS: crate::util::BitMapLen,
+    //     Ev: EvictionPolicy,
+    // {
+    //     if let Some(dir) = self.into_dir_iter(fs, s) {
+
+    //     }
+    // }
 }
 
 pub struct DirIter<'f, 's, S, CS, Ev>
@@ -432,6 +449,38 @@ where
             Err(())
         }
     }
+
+    pub fn delete(
+        &mut self,
+        ((c, offset), mut de): ((ClusterIdx, u32), DirEntry),
+    ) -> Result<(), ()> {
+        // TODO: actually clear the clusters this file has!
+        // i.e. make a FatEntryTracer and mark each cluster as unused.
+
+        // TODO: make the recursive stuff here actually work!
+        // if de.attributes.is_dir() {
+        //     let mut di = DirIter::from_cluster(de.cluster_idx(), self.file_sys, self.storage);
+
+        //     loop {
+        //         if let Some(entry) = di.next() {
+        //             self.delete(entry)?;
+        //         } else {
+        //             break
+        //         }
+        //     }
+        // }
+
+        let f = FatEntry::from(c);
+        let mut t = f.upgrade(self.file_sys, self.storage);
+
+        let mut buf = [0u8; 32];
+        de.file_name.0[0] = 0xE5;
+        de.into_arr(&mut buf);
+
+        t.write(offset, buf.iter().cloned()).unwrap();
+
+        Ok(())
+    }
 }
 
 impl<'f, 's, S, CS, Ev> Iterator for DirIter<'f, 's, S, CS, Ev>
@@ -442,11 +491,12 @@ where
     CS: crate::util::BitMapLen,
     Ev: EvictionPolicy,
 {
-    type Item = DirEntry;
+    type Item = ((ClusterIdx, u32), DirEntry);
 
-    fn next(&mut self) -> Option<DirEntry> {
+    fn next(&mut self) -> Option<((ClusterIdx, u32), DirEntry)> {
         let entry = if let Some(offset) = self.current_offset {
-            let f = FatEntry::from(self.current_cluster);
+            let current_cluster = self.current_cluster;
+            let f = FatEntry::from(current_cluster);
             let mut t = f.upgrade(self.file_sys, self.storage);
 
             let mut buf = [0u8; 32];
@@ -468,17 +518,17 @@ where
                 });
             }
 
-            Some(entry)
+            Some(((current_cluster, offset), entry))
         } else {
             None
         };
 
-        if let Some(entry) = entry {
+        if let Some((i, entry)) = entry {
             if entry.attributes == AttributeSet::LFN {
                 // if so, skip this!
                 self.next()
             } else {
-                Some(entry)
+                Some((i, entry))
             }
         } else {
             None
