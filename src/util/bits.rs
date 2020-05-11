@@ -16,13 +16,14 @@ impl Bits for u8 {
     }
 
     fn set_bit(&mut self, b: u32, v: bool) {
-        *self = *self | (((v as Self) << b) as Self);
+        *self = (*self & !(1 << b)) | (((v as Self) << b) as Self);
     }
 }
 
 #[cfg(test)]
 mod bits {
     use super::*;
+    use assert_eq as eq;
 
     #[test]
     fn get() {
@@ -30,19 +31,30 @@ mod bits {
         const T: bool = true;
         const F: bool = false;
 
-        assert_eq!(T, a.b(7));
-        assert_eq!(F, a.b(6));
-        assert_eq!(T, a.b(5));
-        assert_eq!(F, a.b(4));
-        assert_eq!(F, a.b(3));
-        assert_eq!(T, a.b(2));
-        assert_eq!(F, a.b(1));
-        assert_eq!(T, a.b(0));
+        eq!(T, a.b(7));
+        eq!(F, a.b(6));
+        eq!(T, a.b(5));
+        eq!(F, a.b(4));
+        eq!(F, a.b(3));
+        eq!(T, a.b(2));
+        eq!(F, a.b(1));
+        eq!(T, a.b(0));
     }
 
     #[test]
     #[should_panic]
     fn out_of_range() {
         let _ = 78u8.b(8);
+    }
+
+    #[test]
+    fn set() {
+        let mut a: u8 = 0b0000000;
+
+        a.set_bit(0, true);
+        eq!(a, 1);
+
+        a.set_bit(0, false);
+        eq!(a, 0);
     }
 }

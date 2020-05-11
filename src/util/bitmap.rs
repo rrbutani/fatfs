@@ -122,7 +122,7 @@ impl<LEN: BitMapLen> BitMap<LEN> {
     // Returns an `Err` if out of bounds.
     pub fn set(&mut self, bit: usize, val: bool) -> Result<bool, ()> {
         self.bit_to_idx(bit).map(|(idx, offset)| {
-            let prev = self.arr[idx].b(offset as u32);
+            let prev: bool = self.arr[idx].b(offset as u32);
             self.arr[idx].set_bit(offset as u32, val);
 
             match (prev, val) {
@@ -148,6 +148,10 @@ impl<LEN: BitMapLen> BitMap<LEN> {
             return Ok(self.next_free);
         } else {
             // If that didn't work we need to do a sweep.
+            if self.num_free_bits == 0 {
+                return Err(());
+            }
+
             for b in (self.next_free..self.length()).chain(0..self.next_free) {
                 if self.get(b).unwrap() == false {
                     self.next_free = b;
