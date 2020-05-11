@@ -276,8 +276,8 @@ impl BiosParameterBlock {
 // TODO: FS Information Sector
 
 impl BootSector {
-    pub fn starting_fat_sector(&self) -> u32 {
-        (self.bpb.num_reserved_logical_sectors as u32)
-            + self.bpb.hidden_preceeding_sectors
+    pub fn starting_fat_sector(&self) -> SectorIdx {
+        SectorIdx::new(/*(self.bpb.num_reserved_logical_sectors as u64)
+            +*/ self.bpb.hidden_preceeding_sectors as u64)
     }
 }
