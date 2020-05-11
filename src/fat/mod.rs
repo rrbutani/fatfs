@@ -208,7 +208,8 @@ where
 
     pub fn lookup_path(&mut self, s: &mut S, path: &[u8]) -> Result<((ClusterIdx, u32), DirEntry), ()> {
         let mut dir_cluster = self.root_dir_cluster_num;
-        let mut dir_entry = None;
+        let mut dir_entry = Some(((dir_cluster, 0), DirEntry::empty()));
+        dir_entry.as_mut().unwrap().1.set_cluster_idx(dir_cluster);
 
         for path_segment in path.split(|c| *c == '/' as u8) {
             if path_segment.len() == 0 { continue; }

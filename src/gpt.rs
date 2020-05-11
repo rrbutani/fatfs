@@ -182,6 +182,7 @@ impl PartitionEntry {
 // TODO: an iterator over partition entries...
 
 impl Gpt {
+    #[inline(always)]
     pub fn read_gpt<S: Storage<Word = u8, SECTOR_SIZE = U512>>(storage: &mut S) -> Result<Gpt, ()> {
         let mut sector = GenericArray::default();
         storage.read_sector(1, &mut sector).unwrap(); // TODO: don't unwrap.
