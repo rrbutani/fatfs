@@ -42,14 +42,15 @@ pub mod efile {
     use crate::fat::FatFs;
     use crate::fat::cache::eviction_policies::{LeastRecentlyAccessed, UnmodifiedFirst};
     use crate::fat::dir::{DirIter, State};
+    use crate::fat::table::FatEntry;
 
-    use typenum::consts::{U512, U32, U16};
+    use typenum::consts::{U512, U32, U16, U8, U4};
 
-    use core::slice::from_raw_parts;
+    use core::slice::{from_raw_parts, from_raw_parts_mut};
 
     static STORAGE: Mutex<Option<EDiskStorage>> = Mutex::new(None);
     static FS: Mutex<Option<
-        FatFs<EDiskStorage, U16, UnmodifiedFirst<LeastRecentlyAccessed>>
+        FatFs<EDiskStorage, U4, UnmodifiedFirst<LeastRecentlyAccessed>>
     >> = Mutex::new(None);
 
     #[no_mangle]
@@ -88,17 +89,94 @@ pub mod efile {
     }
 
     #[no_mangle]
-    pub extern "C" fn eFile_Read(path: *const u8, len: u16, offset: u32, buf: *mut u8, buf_len: u32) -> bool {
+    pub extern "C" fn eFile_Read(path: *const u8, len: u16, mut offset: u32, buf: *mut u8, buf_len: u32) -> bool {
         let path = unsafe { from_raw_parts(path, len as usize) };
+        let mut buf = unsafe { from_raw_parts_mut(buf, buf_len as usize) };
 
-        todo!()
+        STORAGE.cs(|s| s.as_mut().map(|s| FS.cs(|f| f.as_mut().map(|f| {
+            let bytes_in_a_cluster = f.bytes_in_a_cluster();
+
+            if let Ok((_, p)) = f.lookup_path(s, path) {
+                if !p.attributes.is_file() {
+                    false
+                } else {
+                    let mut c = p.cluster_idx();
+                    if offset + buf_len >= p.file_size {
+                        return false;
+                    }
+
+                    for b in buf.iter_mut() {
+                        while offset >= bytes_in_a_cluster {
+                            offset -= bytes_in_a_cluster;
+
+                            let fe = FatEntry::from(c);
+                            c = fe.trace(f, s).next().unwrap().next;
+                        }
+
+                        // Assumes contiguous clusters for the moment..
+                        // TODO: when offset is a multiple of the cluster size, update
+                        // the cluster...
+                        let (_, offs) = f.cluster_to_sector(c, offset);
+
+                        let mut buf = [0];
+                        let mut fe = FatEntry::from(c);
+                        fe.upgrade(f, s).read(offs as u32, &mut buf).unwrap();
+
+                        *b = buf[0];
+
+                        offset += 1;
+                    }
+
+                    true
+                }
+            } else {
+                false
+            }
+        })).unwrap_or(false)).unwrap_or(false))
     }
 
     #[no_mangle]
     pub extern "C" fn eFile_ReadAll(path: *const u8, len: u16, func: extern "C" fn(u8)) -> bool {
         let path = unsafe { from_raw_parts(path, len as usize) };
 
-        todo!()
+        STORAGE.cs(|s| s.as_mut().map(|s| FS.cs(|f| f.as_mut().map(|f| {
+            let bytes_in_a_cluster = f.bytes_in_a_cluster();
+
+            if let Ok((_, p)) = f.lookup_path(s, path) {
+                if !p.attributes.is_file() {
+                    false
+                } else {
+                    let mut c = p.cluster_idx();
+                    let mut offset = 0;
+
+                    for _ in 0..p.file_size {
+                        while offset >= bytes_in_a_cluster {
+                            offset -= bytes_in_a_cluster;
+
+                            let fe = FatEntry::from(c);
+                            c = fe.trace(f, s).next().unwrap().next;
+                        }
+
+                        // Assumes contiguous clusters for the moment..
+                        // TODO: when offset is a multiple of the cluster size, update
+                        // the cluster...
+                        let (_, offs) = f.cluster_to_sector(c, offset);
+
+                        let mut buf = [0];
+                        let mut fe = FatEntry::from(c);
+                        fe.upgrade(f, s).read(offs as u32, &mut buf).unwrap();
+
+                        func(buf[0]);
+
+                        offset += 1;
+                    }
+
+                    true
+                }
+            } else {
+                false
+            }
+        })).unwrap_or(false)).unwrap_or(false))
     }
 
     #[no_mangle]
