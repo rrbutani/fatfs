@@ -173,10 +173,10 @@ impl PartialOrd for CacheEntry {
             (Free, Free) => Ordering::Equal,
 
             (Resident { .. }, Free) |
-            (Dirty { .. }, Free) => Ordering::Greater,
+            (Dirty { .. }, Free) => Ordering::Less,
 
             (Free, Resident { .. }) |
-            (Free, Dirty { .. }) => Ordering::Less,
+            (Free, Dirty { .. }) => Ordering::Greater,
         })
     }
 }
@@ -638,7 +638,7 @@ where
 
         // And finally, remove it from the table and the bitmap:
         self.cache_table.remove(sector_idx).expect("to be able to remove clean entries");
-        self.cache_bitmap.set(sector_idx.idx(), false).unwrap();
+        self.cache_bitmap.set(arr_idx, false).unwrap();
 
         Ok(())
     }
