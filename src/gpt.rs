@@ -8,6 +8,8 @@
 
 // TODO: switch from pub(crate) to pub, I think
 
+// TODO: use the newtypes here (i.e. SectorIdx)
+
 use super::Storage;
 
 use storage_traits::errors::WriteError;

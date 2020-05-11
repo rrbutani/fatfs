@@ -70,6 +70,7 @@ dependencies = [
  "cortex-m",
  "crc",
  "generic-array 0.14.1",
+ "log",
  "storage-traits",
  "typenum",
 ]
@@ -99,6 +100,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d2664c2cf08049036f31015b04c6ac3671379a1d86f52ed2416893f16022deb"
 dependencies = [
  "typenum",
+]
+
+[[package]]
+name = "log"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14b6052be84e6b71ab17edffc2eeabf5c2c3ae1fdb464aae35ac50c67a44e1f7"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
