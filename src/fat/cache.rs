@@ -529,60 +529,548 @@ pub mod eviction_policies {
         (Dirty { .. }, Resident { .. }) => Ordering::Less,
 
         (Resident { .. }, Resident { .. }) |
-        (Dirty { .. }, Dirty { .. }) => inner.cmp(a, b),
+        (Dirty { .. }, Dirty { .. }) => inner.compare(a, b),
     }
 
     /// Prefers unmodified entries over modified entries, with entry age being
     /// used as a tiebreaker (younger entries are picked over older ones).
-    pub static UNMODIFIED_THEN_YOUNGEST: dyn EvectionPolicy =
-        UnmodifiedFirst<YOUNGEST>(YOUNGEST);
+    pub static UNMODIFIED_THEN_YOUNGEST: DynEvictionPolicy =
+        &UnmodifiedFirst::<Youngest>(Youngest);
 
     /// Prefers unmodified entries over modified entries, with entry age being
     /// used as a tiebreaker (older entries are picked over younger ones).
-    pub static UNMODIFIED_THEN_OLDEST: dyn EvectionPolicy =
-        UnmodifiedFirst<Oldest>(Oldest);
+    pub static UNMODIFIED_THEN_OLDEST: DynEvictionPolicy =
+        &UnmodifiedFirst::<Oldest>(Oldest);
 
     /// Prefers unmodified entries over modified entries, with last entry access
     /// being used as a tiebreaker (more recently accessed entries are
     /// preferred).
-    pub static UNMODIFIED_THEN_MOST_RECENTLY_ACCESSED: dyn EvictionPolicy =
-        UnmodifiedFirst<MostRecentlyAccessed>(MostRecentlyAccessed);
+    pub static UNMODIFIED_THEN_MOST_RECENTLY_ACCESSED: DynEvictionPolicy =
+        &UnmodifiedFirst::<MostRecentlyAccessed>(MostRecentlyAccessed);
 
     /// Prefers unmodified entries over modified entries, with last entry access
     /// being used as a tiebreaker (less recently accessed entries are
     /// preferred).
-    pub static UNMODIFIED_THEN_LEAST_RECENTLY_ACCESSED: dyn EvictionPolicy =
-        UnmodifiedFirst<LeastRecentlyAccessed>(LeastRecentlyAccessed);
+    pub static UNMODIFIED_THEN_LEAST_RECENTLY_ACCESSED: DynEvictionPolicy =
+        &UnmodifiedFirst::<LeastRecentlyAccessed>(LeastRecentlyAccessed);
 
     policy! { <Inner as inner> ModifiedFirst with (a, b):
         (Dirty { .. }, Resident { .. }) => Ordering::Greater,
         (Resident { .. }, Dirty { .. }) => Ordering::Less,
 
         (Resident { .. }, Resident { .. }) |
-        (Dirty { .. }, Dirty { .. }) => inner.cmp(a, b),
+        (Dirty { .. }, Dirty { .. }) => inner.compare(a, b),
     }
 
     /// Prefers modified entries over unmodified entries, with entry age being
     /// used as a tiebreaker (younger entries are picked over older ones).
-    pub static MODIFIED_THEN_YOUNGEST: dyn EvectionPolicy =
-        ModifiedFirst<YOUNGEST>(YOUNGEST);
+    pub static MODIFIED_THEN_YOUNGEST: DynEvictionPolicy =
+        &ModifiedFirst::<Youngest>(Youngest);
 
     /// Prefers modified entries over unmodified entries, with entry age being
     /// used as a tiebreaker (older entries are picked over younger ones).
-    pub static MODIFIED_THEN_OLDEST: dyn EvectionPolicy =
-        ModifiedFirst<Oldest>(Oldest);
+    pub static MODIFIED_THEN_OLDEST: DynEvictionPolicy =
+        &ModifiedFirst::<Oldest>(Oldest);
 
     /// Prefers modified entries over unmodified entries, with last entry access
     /// being used as a tiebreaker (more recently accessed entries are
     /// preferred).
-    pub static MODIFIED_THEN_MOST_RECENTLY_ACCESSED: dyn EvictionPolicy =
-        ModifiedFirst<MostRecentlyAccessed>(MostRecentlyAccessed);
+    pub static MODIFIED_THEN_MOST_RECENTLY_ACCESSED: DynEvictionPolicy =
+        &ModifiedFirst::<MostRecentlyAccessed>(MostRecentlyAccessed);
 
     /// Prefers modified entries over unmodified entries, with last entry access
     /// being used as a tiebreaker (less recently accessed entries are
     /// preferred).
-    pub static MODIFIED_THEN_LEAST_RECENTLY_ACCESSED: dyn EvictionPolicy =
-        ModifiedFirst<LeastRecentlyAccessed>(LeastRecentlyAccessed);
+    pub static MODIFIED_THEN_LEAST_RECENTLY_ACCESSED: DynEvictionPolicy =
+        &ModifiedFirst::<LeastRecentlyAccessed>(LeastRecentlyAccessed);
 
 }
 
+#[allow(non_camel_case_types)]
+pub struct SectorCache<StorageImpl, SECTOR_SIZE, CACHE_SIZE_IN_SECTORS, Eviction = DynEvictionPolicy>
+where
+    StorageImpl: Storage<Word = u8, SECTOR_SIZE = SECTOR_SIZE>,
+    SECTOR_SIZE: ArrayLength<u8>,
+    CACHE_SIZE_IN_SECTORS: ArrayLength<RefCell<GenericArray<u8, SECTOR_SIZE>>>,
+    CACHE_SIZE_IN_SECTORS: ArrayLength<CacheEntry>,
+    CACHE_SIZE_IN_SECTORS: BitMapLen,
+    Eviction: EvictionPolicy,
+{
+    cached_sectors: GenericArray<RefCell<GenericArray<u8, SECTOR_SIZE>>, CACHE_SIZE_IN_SECTORS>,
+    cache_table: CacheTable<CACHE_SIZE_IN_SECTORS>,
+    cache_bitmap: BitMap<CACHE_SIZE_IN_SECTORS>,
+
+    max_sector_idx: SectorIdx,
+
+    eviction_policy: Eviction,
+    counter: RefCell<u64>,
+
+    _s: PhantomData<StorageImpl>,
+}
+
+#[allow(non_camel_case_types)]
+impl<S, SECT_SIZE, CACHE_SIZE, Ev> SectorCache<S, SECT_SIZE, CACHE_SIZE, Ev>
+where
+    S: Storage<Word = u8, SECTOR_SIZE = SECT_SIZE>,
+    SECT_SIZE: ArrayLength<u8>,
+    CACHE_SIZE: ArrayLength<RefCell<GenericArray<u8, SECT_SIZE>>>,
+    CACHE_SIZE: ArrayLength<CacheEntry>,
+    CACHE_SIZE: BitMapLen,
+    Ev: EvictionPolicy,
+{
+    pub /*const*/ fn cache_size_in_bytes() -> usize {
+        SECT_SIZE::to_usize() * CACHE_SIZE::to_usize()
+    }
+
+    pub fn new(_witness: &S, max_sector_idx: SectorIdx, ev: Ev) -> Self {
+        Self {
+            cached_sectors: Default::default(),
+            cache_table: CacheTable::new(),
+            cache_bitmap: BitMap::new(),
+
+            max_sector_idx,
+
+            eviction_policy: ev,
+            counter: RefCell::new(0),
+
+            _s: PhantomData,
+        }
+    }
+
+    /// Returns `Err` if there are no entries there to evict.
+    /*pub */fn evict_entry(&mut self, storage: &mut S) -> Result<(), ()> {
+        if self.cache_table.len() == 0 { return Err(()); }
+
+        let entry = self.eviction_policy.pick_entry_to_evict(
+                &mut self.cache_table.cache_entry_table)
+            .expect("must give an entry to evict when the cache table is not \
+                empty");
+
+        let sector_idx = entry.get_sector_idx().expect("dirty entries have a sector index");
+        let arr_idx = entry.get_arr_idx().expect("dirty entries have an arr index");
+
+        // Check if the entry we're to remove is dirty:
+        if entry.is_dirty() {
+            // If it is, write it out:
+            storage.write_sector(
+                sector_idx.idx(),
+                // We do a mutable borrow here even though we don't _need_ to
+                // because we want to make sure that no one else has a reference
+                // to this sector that's being evicted. While we don't remove
+                // the sector or overwrite it here (which is why we don't need
+                // a mutable reference) we're presumably about to.
+                &self.cached_sectors[arr_idx].try_borrow_mut().expect("no references to a sector we're about to evict"),
+            ).unwrap();
+
+            // And mark it as clean:
+            entry.mark_as_clean().unwrap();
+        }
+
+        // And finally, remove it from the table and the bitmap:
+        self.cache_table.remove(sector_idx).expect("to be able to remove clean entries");
+        self.cache_bitmap.set(sector_idx.idx(), false).unwrap();
+
+        Ok(())
+    }
+
+    // Since storage has to be passed into us, unfortunately we can't do this
+    // on Drop...
+    pub fn flush(&mut self, storage: &mut S) -> Result<(), ()> {
+        let ref cached_sectors = self.cached_sectors;
+
+        self.cache_table.for_each_dirty_entry(|(idx, e)| {
+            storage.write_sector(
+                e.get_sector_idx().expect("dirty entries have a sector index").idx(),
+                // We don't actually need a mutable borrow here but, as the
+                // message below explains, we should always get it and it's a
+                // good sanity test.
+                &cached_sectors[idx].try_borrow_mut().expect("no references to any sectors when we have a mutable reference to the sector cache"),
+            ).unwrap();
+
+            e.mark_as_clean()
+        })
+    }
+
+    pub fn upgrade<'s>(
+        &'s mut self,
+        storage: &'s mut S
+    ) -> SectorCacheWithStorage<'s, S, SECT_SIZE, CACHE_SIZE, Ev, UnIndexable> {
+        // TODO: should we enable flush on Drop here?
+
+        SectorCacheWithStorage::new(self, storage)
+    }
+
+    pub fn get_sector_entry(
+        &mut self,
+        storage: &mut S,
+        index: SectorIdx,
+    ) -> &CacheEntry {
+        // See if we've already got this sector in the cache:
+        if let Some(c) = self.cache_table.get(index) {
+            c
+        } else {
+            // If we don't, try to load it into the cache.
+
+            // First, let's get the index where we can place the sector:
+            // let idx = match self.cache_bitmap.next_empty_bit() {
+            //     Ok(idx) => idx,
+            //     Err(()) => {
+                    // If the cache is full, we need to evict a sector.
+                    self.evict_entry(storage)/*.expect("eviction to succeed")*/;
+
+                    // Now, we can try to get an index again; this time it
+                    // _must_ succeed:
+            //         self.cache_bitmap.next_empty_bit().expect("an empty sector after eviction")
+            //     },
+            // };
+
+            unreachable!()
+            // // Load the sector in:
+            // // (it's a little silly that we go lookup the index to this sector
+            // // again but it's worth it for maintaining the symmetry)
+            // storage.read_sector(
+            //     index.idx(),
+            //     &mut self.cached_sectors[idx].try_borrow_mut().expect("clean entries to have no references")
+            // ).unwrap();
+
+            // // Add to the cache table and the bitmap:
+            // self.cache_bitmap.set(idx, true).unwrap();
+            // match self.cache_table
+            //         .insert(index, idx, &mut self.counter.borrow_mut()) {
+            //     Ok(entry) => entry,
+
+            //     // It's not possible that we're out of space; the cache bitmap
+            //     // gave us an index.
+            //     Err(None) => unreachable!(),
+
+            //     // It's not possible that this sector is already cached; we
+            //     // started by looking it up.
+            //     Err(Some(_)) => unreachable!(),
+            // }
+        }
+
+        // // See if we've already got this sector in the cache:
+        // if let Some(_) = self.cache_table.get(index) {
+        //     // return c; // Unfortunately the borrow checker is not smart enough
+        //                  // to see that this arm is mutually exclusive from the
+        //                  // other arm because of the return.
+        // } else {
+        //     // If we don't, try to load it into the cache.
+
+        //     // First, let's get the index where we can place the sector:
+        //     let idx = match self.cache_bitmap.next_empty_bit() {
+        //         Ok(idx) => idx,
+        //         Err(()) => {
+        //             // If the cache is full, we need to evict a sector.
+        //             self.evict_entry(storage).expect("eviction to succeed");
+
+        //             // Now, we can try to get an index again; this time it
+        //             // _must_ succeed:
+        //             self.cache_bitmap.next_empty_bit().expect("an empty sector after eviction")
+        //         },
+        //     };
+
+        //     // Load the sector in:
+        //     // (it's a little silly that we go lookup the index to this sector
+        //     // again but it's worth it for maintaining the symmetry)
+        //     storage.read_sector(
+        //         index.idx(),
+        //         &mut self.cached_sectors[idx].try_borrow_mut().expect("clean entries to have no references")
+        //     ).unwrap();
+
+        //     // Add to the cache table and the bitmap:
+        //     self.cache_bitmap.set(idx, true).unwrap();
+        //     match self.cache_table
+        //             .insert(index, idx, &mut self.counter.borrow_mut()) {
+        //         Ok(entry) => /*entry*/ {},
+
+        //         // It's not possible that we're out of space; the cache bitmap
+        //         // gave us an index.
+        //         Err(None) => unreachable!(),
+
+        //         // It's not possible that this sector is already cached; we
+        //         // started by looking it up.
+        //         Err(Some(_)) => unreachable!(),
+        //     }
+        // }
+
+        // self.cache_table.get(index).unwrap()
+    }
+}
+
+#[allow(non_camel_case_types)]
+impl<S, SECT_SIZE, CACHE_SIZE> SectorCache<S, SECT_SIZE, CACHE_SIZE, DynEvictionPolicy>
+where
+    S: Storage<Word = u8, SECTOR_SIZE = SECT_SIZE>,
+    SECT_SIZE: ArrayLength<u8>,
+    CACHE_SIZE: ArrayLength<RefCell<GenericArray<u8, SECT_SIZE>>>,
+    CACHE_SIZE: ArrayLength<CacheEntry>,
+    CACHE_SIZE: BitMapLen,
+{
+    pub fn change_eviction_policy(&mut self, ev: DynEvictionPolicy) {
+        self.eviction_policy = ev
+    }
+}
+
+#[allow(non_camel_case_types)]
+impl<S, SECT_SIZE, CACHE_SIZE, Ev> Drop for SectorCache<S, SECT_SIZE, CACHE_SIZE, Ev>
+where
+    S: Storage<Word = u8, SECTOR_SIZE = SECT_SIZE>,
+    SECT_SIZE: ArrayLength<u8>,
+    CACHE_SIZE: ArrayLength<RefCell<GenericArray<u8, SECT_SIZE>>>,
+    CACHE_SIZE: ArrayLength<CacheEntry>,
+    CACHE_SIZE: BitMapLen,
+    Ev: EvictionPolicy,
+{
+    fn drop(&mut self) {
+        let mut i = 0;
+
+        self.cache_table.for_each_dirty_entry::<(), _>(|_| {
+            i += 1;
+
+            Ok(())
+        }).unwrap();
+
+        if i != 0 {
+            panic!("A SectorCache was dropped with dirty entries ({} of them)!", i);
+        }
+    }
+}
+
+pub struct UnIndexable;
+pub struct Indexable;
+
+#[allow(non_camel_case_types)]
+pub struct SectorCacheWithStorage<'s, StorageImpl, SECTOR_SIZE, CACHE_SIZE_IN_SECTORS, Eviction, Ty = UnIndexable>
+where
+    StorageImpl: Storage<Word = u8, SECTOR_SIZE = SECTOR_SIZE>,
+    SECTOR_SIZE: ArrayLength<u8>,
+    CACHE_SIZE_IN_SECTORS: ArrayLength<RefCell<GenericArray<u8, SECTOR_SIZE>>>,
+    CACHE_SIZE_IN_SECTORS: ArrayLength<CacheEntry>,
+    CACHE_SIZE_IN_SECTORS: BitMapLen,
+    Eviction: EvictionPolicy,
+{
+    sector_cache: RefCell<&'s mut SectorCache<StorageImpl, SECTOR_SIZE, CACHE_SIZE_IN_SECTORS, Eviction>>,
+    storage: RefCell<&'s mut StorageImpl>,
+
+    flush_on_drop: bool,
+
+    _ty: PhantomData<Ty>,
+}
+
+#[allow(non_camel_case_types)]
+impl<'s, S, SS, CS, Ev, Ty> SectorCacheWithStorage<'s, S, SS, CS, Ev, Ty>
+where
+    S: Storage<Word = u8, SECTOR_SIZE = SS>,
+    SS: ArrayLength<u8>,
+    CS: ArrayLength<RefCell<GenericArray<u8, SS>>>,
+    CS: ArrayLength<CacheEntry>,
+    CS: BitMapLen,
+    Ev: EvictionPolicy,
+{
+    pub fn flush_on_drop(&mut self, enable: bool) {
+        self.flush_on_drop = enable
+    }
+
+    fn refs(&self) -> (RefMut<&'s mut SectorCache<S, SS, CS, Ev>>, RefMut<&'s mut S>) {
+        (self.sector_cache.borrow_mut(), self.storage.borrow_mut())
+    }
+
+    /// Note: this will panic if, in order to load the requested sector, we end
+    /// up needing to evict a sector that has a borrow currently out.
+    pub fn get<'r>(&'r self, index: SectorIdx) -> Ref<'r, GenericArray<u8, SS>> {
+        let arr_idx = self.get_inner(index);
+
+        #[allow(unsafe_code)]
+        // I think this is safe; we're getting an untracked reference to the
+        // sector cache but only taking a tracked reference out of one of its
+        // components. Accesses to the sector cache ref cell aren't aware of
+        // this but any accesses to the actual sector will be, which is why I
+        // think this is okay.
+        //
+        // There's possibly a better way to get a reference out of nested
+        // RefCells. Or a better way to do this entire thing.
+        let sector_cache_ref = unsafe {
+            self.sector_cache.try_borrow_unguarded().unwrap()
+        };
+
+        sector_cache_ref.cached_sectors[arr_idx]
+            .try_borrow()
+            .expect("immutable sector borrows always succeed")
+    }
+
+    // Note: this will panic if, in order to load the requested sector, we end
+    // up needing to evict a sector that has a borrow currently out.
+    fn get_inner<'r>(&'r self, index: SectorIdx) -> usize {
+        let (mut sector_cache, mut storage) = self.refs();
+
+        let mut counter = sector_cache.counter.borrow();
+        let cache_entry = sector_cache.get_sector_entry(&mut storage, index);
+
+        // Mark the entry as accessed.
+        cache_entry
+            .accessed(&mut counter)
+            .expect("entry isn't `Free`");
+
+        // Finally, get the entry's corresponding sector cache array:
+        cache_entry
+            .get_arr_idx()
+            .expect("entry has an arr index")
+    }
+
+    pub fn get_mut(&mut self, index: SectorIdx) -> &mut GenericArray<u8, SS> {
+        todo!()
+    }
+}
+
+#[allow(non_camel_case_types)]
+impl<'s, S, SS, CS, Ev> SectorCacheWithStorage<'s, S, SS, CS, Ev, UnIndexable>
+where
+    S: Storage<Word = u8, SECTOR_SIZE = SS>,
+    SS: ArrayLength<u8>,
+    CS: ArrayLength<RefCell<GenericArray<u8, SS>>>,
+    CS: ArrayLength<CacheEntry>,
+    CS: BitMapLen,
+    Ev: EvictionPolicy,
+{
+    pub fn new(sc: &'s mut SectorCache<S, SS, CS, Ev>, stor: &'s mut S) -> Self {
+        Self {
+            sector_cache: RefCell::new(sc),
+            storage: RefCell::new(stor),
+
+            flush_on_drop: false,
+
+            _ty: PhantomData,
+        }
+    }
+
+    /// It turns out we cannot safely implement Index (and therefore IndexMut)
+    /// for this type,
+    ///
+    /// The issue is that in Index we really mutate the underlying sector cache
+    /// (when evicting sectors) but we also give out references to specific
+    /// sectors _within_ the cache. This is a problem because it means it's
+    /// possible for us to evict a sector that someone already has a reference
+    /// to!
+    ///
+    /// If we want to support having multiple borrows of sectors out at once
+    /// from this type (this isn't supported for mutable borrows of sectors
+    /// which is why IndexMut doesn't have this problem) we need to turn to some
+    /// kind of reference counting (I'm reasonably sure we can't reason about
+    /// this at compile time since cache eviction is dynamic and all).
+    ///
+    /// We can have each borrow be given a type like `Ref` that maintains a
+    /// reference count variable for the sector that is being borrowed. On Drop,
+    /// it decrements the reference count (which means that it needs a reference
+    /// to the instance of this type). If this sounds a lot like RefCell, that's
+    /// because it is basically RefCell.
+    ///
+    /// Rather than reinvent the wheel we can just wrap our sectors in RefCells
+    /// and give out leases to those for `get` and `get_mut`. This then becomes
+    /// safe (and possible to write in safe Rust!).
+    ///
+    /// For Index, because we _must_ return references to things we cannot do
+    /// this (i.e. we can't return a concrete type with a Drop impl and we
+    /// can't impl Drop on a reference — even for a type we own). Even so, we
+    /// offer an Index and IndexMut impl for a variant of this type. You have
+    /// to use this function to make said variant of the type and this function
+    /// is unsafe because you have to promise that you'll make sure you don't
+    /// hold onto sectors that get evicted.
+    pub unsafe fn make_indexable(self) -> SectorCacheWithStorage<'s, S, SS, CS, Ev, Indexable> {
+        // let flush_on_drop = self.flush_on_drop;
+        // self.flush_on_drop = false;
+
+        // SectorCacheWithStorage {
+        //     sector_cache: self.sector_cache.clone(),
+        //     storage: self.storage.clone(),
+        //     flush_on_drop,
+        //     _ty: PhantomData
+        // }
+
+        // I think this is safe..
+        #[allow(unused_unsafe)]
+        unsafe { core::mem::transmute(self) }
+    }
+}
+
+#[allow(non_camel_case_types)]
+impl<'s, S, SS, CS, Ev, Ty> Drop for SectorCacheWithStorage<'s, S, SS, CS, Ev, Ty>
+where
+    S: Storage<Word = u8, SECTOR_SIZE = SS>,
+    SS: ArrayLength<u8>,
+    CS: ArrayLength<RefCell<GenericArray<u8, SS>>>,
+    CS: ArrayLength<CacheEntry>,
+    CS: BitMapLen,
+    Ev: EvictionPolicy,
+{
+    fn drop(&mut self) {
+        if self.flush_on_drop {
+            self.sector_cache.borrow_mut().flush(&mut self.storage.borrow_mut()).unwrap()
+        }
+    }
+}
+
+#[allow(non_camel_case_types)]
+impl<'s, S, SECT_SIZE, CACHE_SIZE, Ev> Index<SectorIdx> for SectorCacheWithStorage<'s, S, SECT_SIZE, CACHE_SIZE, Ev, Indexable>
+where
+    S: Storage<Word = u8, SECTOR_SIZE = SECT_SIZE>,
+    SECT_SIZE: ArrayLength<u8>,
+    CACHE_SIZE: ArrayLength<RefCell<GenericArray<u8, SECT_SIZE>>>,
+    CACHE_SIZE: ArrayLength<CacheEntry>,
+    CACHE_SIZE: BitMapLen,
+    Ev: EvictionPolicy,
+{
+    type Output = GenericArray<u8, SECT_SIZE>;
+
+    fn index(&self, index: SectorIdx) -> &GenericArray<u8, SECT_SIZE> {
+        // Ideally we'd just call `get` here and use `Ref::leak` but that
+        // requires nightly so we end up having to copy over the contents of
+        // that function here (get_inner exists so we don't have to copy
+        // _everything_).
+
+        let arr_idx = self.get_inner(index);
+
+        unsafe {
+            self.sector_cache
+                .try_borrow_unguarded() // I think this is safe (see `get`)
+                .unwrap()
+                .cached_sectors[arr_idx]
+                .try_borrow_unguarded() // This is potentially dangerous but they opted in.
+                .unwrap()
+        }
+    }
+}
+
+#[allow(non_camel_case_types)]
+impl<'s, S, SECT_SIZE, CACHE_SIZE, Ev> IndexMut<SectorIdx> for SectorCacheWithStorage<'s, S, SECT_SIZE, CACHE_SIZE, Ev, Indexable>
+where
+    S: Storage<Word = u8, SECTOR_SIZE = SECT_SIZE>,
+    SECT_SIZE: ArrayLength<u8>,
+    CACHE_SIZE: ArrayLength<RefCell<GenericArray<u8, SECT_SIZE>>>,
+    CACHE_SIZE: ArrayLength<CacheEntry>,
+    CACHE_SIZE: BitMapLen,
+    Ev: EvictionPolicy,
+{
+    fn index_mut(&mut self, index: SectorIdx) -> &mut GenericArray<u8, SECT_SIZE> {
+        let (cache_table, storage) = self.refs();
+
+        // See if we've already got this sector in the cache:
+
+        todo!()
+    }
+}
+
+// TODO: i wonder if it'd be practical to implement Index<Range<Sector>> for
+// SectorCache.. the problems (that i can think of immediately) are:
+//   - what happens when you ask for more sectors than we can accommodate
+//   - what happens when some (or all) of the sectors you ask for are cached
+//     but aren't back to back?
+//
+// Rearranging sectors to make sure we have a contiguous slice also sounds
+// pretty painful.. we also don't actually have a contiguous block of memory
+// underneath us (we've got a GenericArray of GenericArrays) so I think that
+// makes this pretty much impossible without changing the internal to actually
+// just use one huge u8 array (length = Mul<SECTOR_SIZE, CACHE_SIZE>).
+//
+// In any case, the use case for having an actually contiguous array of memory
+// that represents a file seems extremely small/niche.
