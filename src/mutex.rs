@@ -6,7 +6,7 @@
 //! (We are okay with this because, as configured, we can't recover from panics
 //! on embedded anyways — our panic handler just spins forever.)
 
-trait MutexInterface<T>: Sync {
+pub trait MutexInterface<T>: Sync {
     fn new(inner: T) -> Self;
 
     // Run a function n a critical section:
@@ -76,6 +76,18 @@ pub mod external_mutex {
     pub struct Mutex<T> {
         semaphore: Cell<Semaphore>,
         inner: Cell<T>,
+    }
+
+    impl<T> Mutex<T> {
+        pub const fn new(inner: T) -> Self {
+            Self {
+                semaphore: Cell::new(Semaphore {
+                    locked: 0,
+                    blocked: ptr::null::<TcbList>() as *mut TcbList,
+                }),
+                inner: Cell::new(inner),
+            }
+        }
     }
 
     impl<T: Send> MutexInterface<T> for Mutex<T> {
