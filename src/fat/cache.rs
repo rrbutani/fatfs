@@ -577,6 +577,21 @@ where
 }
 
 #[allow(non_camel_case_types)]
+impl<S, SECT_SIZE, CACHE_SIZE, Ev> Debug for SectorCache<S, SECT_SIZE, CACHE_SIZE, Ev>
+where
+    S: Storage<Word = u8, SECTOR_SIZE = SECT_SIZE>,
+    SECT_SIZE: ArrayLength<u8>,
+    CACHE_SIZE: ArrayLength<RefCell<GenericArray<u8, SECT_SIZE>>>,
+    CACHE_SIZE: ArrayLength<CacheEntry>,
+    CACHE_SIZE: BitMapLen,
+    Ev: EvictionPolicy,
+{
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(fmt, "TODO!")
+    }
+}
+
+#[allow(non_camel_case_types)]
 impl<S, SECT_SIZE, CACHE_SIZE, Ev> SectorCache<S, SECT_SIZE, CACHE_SIZE, Ev>
 where
     S: Storage<Word = u8, SECTOR_SIZE = SECT_SIZE>,
@@ -769,6 +784,7 @@ pub struct UnIndexable;
 pub struct Indexable;
 
 #[allow(non_camel_case_types)]
+#[derive(Debug)]
 pub struct SectorCacheWithStorage<'s, StorageImpl, SECTOR_SIZE, CACHE_SIZE_IN_SECTORS, Eviction, Ty = UnIndexable>
 where
     StorageImpl: Storage<Word = u8, SECTOR_SIZE = SECTOR_SIZE>,

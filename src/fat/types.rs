@@ -1,6 +1,8 @@
 //! Some type definitions for the driver.
 
 use core::convert::TryInto;
+use core::iter::Iterator;
+use core::ops::Range;
 
 macro_rules! newtype {
     ([$m:ident] $name:tt: $inner:ty $(where constructor = $c:ident)?) => {
@@ -53,10 +55,37 @@ macro_rules! newtype {
 }
 
 newtype!{ [_s] SectorIdx: u64 where constructor = new }
-newtype!{ [_c] ClusterIdx: u64 where constructor = new }
+newtype!{ [_c] ClusterIdx: u32 where constructor = new }
 
 impl SectorIdx {
     pub fn idx(&self) -> usize {
         self.0.try_into().unwrap()
+    }
+}
+
+impl ClusterIdx {
+    pub fn sector_offset(&self, sectors_in_a_cluster: u8) -> SectorIdx {
+        SectorIdx::new((self.0 as u64) * (sectors_in_a_cluster as u64))
+    }
+}
+
+newtype! { [_sr] SectorRange: Range<SectorIdx> where constructor = new }
+
+impl Iterator for SectorRange {
+    type Item = SectorIdx;
+
+    #[inline]
+    fn next(&mut self) -> Option<SectorIdx> {
+        if self.start < self.end {
+            if let Some(n) = self.start.inner().checked_add(1) {
+                let old = self.start;
+                self.start = SectorIdx::new(n);
+                Some(old)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 }
