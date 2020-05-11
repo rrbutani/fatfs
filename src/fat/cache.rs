@@ -7,7 +7,7 @@ use crate::util::{BitMap, BitMapLen};
 use storage_traits::Storage;
 use generic_array::{ArrayLength, GenericArray};
 
-use core::cell::{RefCell, RefMut, Ref};
+use core::cell::{Cell, RefCell, RefMut, Ref};
 use core::cmp::Ordering;
 use core::marker::PhantomData;
 use core::ops::{Index, IndexMut, DerefMut};
@@ -850,8 +850,8 @@ where
     CACHE_SIZE_IN_SECTORS: BitMapLen,
     Eviction: EvictionPolicy,
 {
-    sector_cache: RefCell<&'s mut SectorCache<StorageImpl, SECTOR_SIZE, CACHE_SIZE_IN_SECTORS, Eviction>>,
-    storage: RefCell<&'s mut StorageImpl>,
+    sector_cache: Cell<Option<&'s mut SectorCache<StorageImpl, SECTOR_SIZE, CACHE_SIZE_IN_SECTORS, Eviction>>>,
+    storage: Cell<Option<&'s mut StorageImpl>>,
 
     flush_on_drop: bool,
 
@@ -872,8 +872,18 @@ where
         self.flush_on_drop = enable
     }
 
-    fn refs(&self) -> (RefMut<&'s mut SectorCache<S, SS, CS, Ev>>, RefMut<&'s mut S>) {
-        (self.sector_cache.borrow_mut(), self.storage.borrow_mut())
+    fn refs<R, F: FnOnce(&'s mut SectorCache<S, SS, CS, Ev>, &'s mut S) -> R>(&self, func: F) -> R {
+        let (mut sector_cache_ref, mut storage_ref) = (
+            self.sector_cache.take().unwrap(),
+            self.storage.take().unwrap(),
+        );
+
+        let res = func(sector_cache_ref, storage_ref);
+
+        self.sector_cache.set(Some(sector_cache_ref));
+        self.storage.set(Some(storage_ref));
+
+        res
     }
 
     /// Note: this will panic if, in order to load the requested sector, we end
@@ -881,41 +891,30 @@ where
     pub fn get<'r>(&'r self, index: SectorIdx) -> Ref<'r, GenericArray<u8, SS>> {
         let arr_idx = self.get_inner(index);
 
-        #[allow(unsafe_code)]
-        // I think this is safe; we're getting an untracked reference to the
-        // sector cache but only taking a tracked reference out of one of its
-        // components. Accesses to the sector cache ref cell aren't aware of
-        // this but any accesses to the actual sector will be, which is why I
-        // think this is okay.
-        //
-        // There's possibly a better way to get a reference out of nested
-        // RefCells. Or a better way to do this entire thing.
-        let sector_cache_ref = unsafe {
-            self.sector_cache.try_borrow_unguarded().unwrap()
-        };
-
-        sector_cache_ref.cached_sectors[arr_idx]
-            .try_borrow()
-            .expect("immutable sector borrows always succeed")
+        self.refs(|sector_cache, _| {
+            sector_cache.cached_sectors[arr_idx]
+                .try_borrow()
+                .expect("immutable sector borrows always succeed")
+        })
     }
 
     // Note: this will panic if, in order to load the requested sector, we end
     // up needing to evict a sector that has a borrow currently out.
     fn get_inner<'r>(&'r self, index: SectorIdx) -> usize {
-        let (mut sector_cache, mut storage) = self.refs();
+        self.refs(|mut sector_cache, mut storage| {
+            let mut counter = sector_cache.counter.borrow();
+            let cache_entry = sector_cache.get_sector_entry(&mut storage, index);
 
-        let mut counter = sector_cache.counter.borrow();
-        let cache_entry = sector_cache.get_sector_entry(&mut storage, index);
+            // Mark the entry as accessed.
+            cache_entry
+                .accessed(&mut counter)
+                .expect("entry isn't `Free`");
 
-        // Mark the entry as accessed.
-        cache_entry
-            .accessed(&mut counter)
-            .expect("entry isn't `Free`");
-
-        // Finally, get the entry's corresponding sector cache array:
-        cache_entry
-            .get_arr_idx()
-            .expect("entry has an arr index")
+            // Finally, get the entry's corresponding sector cache array:
+            cache_entry
+                .get_arr_idx()
+                .expect("entry has an arr index")
+        })
     }
 
     pub fn get_mut(&mut self, index: SectorIdx) -> &mut GenericArray<u8, SS> {
@@ -935,8 +934,8 @@ where
 {
     pub fn new(sc: &'s mut SectorCache<S, SS, CS, Ev>, stor: &'s mut S) -> Self {
         Self {
-            sector_cache: RefCell::new(sc),
-            storage: RefCell::new(stor),
+            sector_cache: Cell::new(Some(sc)),
+            storage: Cell::new(Some(stor)),
 
             flush_on_drop: false,
 
@@ -1005,7 +1004,9 @@ where
 {
     fn drop(&mut self) {
         if self.flush_on_drop {
-            self.sector_cache.borrow_mut().flush(&mut self.storage.borrow_mut()).unwrap()
+            self.refs(|sector_cache, storage| {
+                sector_cache.flush(storage).unwrap()
+            })
         }
     }
 }
@@ -1030,14 +1031,14 @@ where
 
         let arr_idx = self.get_inner(index);
 
-        unsafe {
-            self.sector_cache
-                .try_borrow_unguarded() // I think this is safe (see `get`)
-                .unwrap()
-                .cached_sectors[arr_idx]
-                .try_borrow_unguarded() // This is potentially dangerous but they opted in.
-                .unwrap()
-        }
+        self.refs(|sector_cache, _| {
+            unsafe {
+                sector_cache
+                    .cached_sectors[arr_idx]
+                    .try_borrow_unguarded() // This is potentially dangerous but the users opted in.
+                    .unwrap()
+            }
+        })
     }
 }
 
@@ -1052,7 +1053,7 @@ where
     Ev: EvictionPolicy,
 {
     fn index_mut(&mut self, index: SectorIdx) -> &mut GenericArray<u8, SECT_SIZE> {
-        let (cache_table, storage) = self.refs();
+        // let (cache_table, storage) = self.refs();
 
         // See if we've already got this sector in the cache:
 
