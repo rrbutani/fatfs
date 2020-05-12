@@ -26,7 +26,7 @@ use fs::{
 
 use storage_traits::{FileBackedStorage, Storage};
 
-use typenum::consts::U16384;
+use typenum::consts::{U16384, U128, U1, U1000000};
 
 const FILES: &[(&'static str, u64)] = &[
     ("/1k", 1682929735),
@@ -53,7 +53,7 @@ fn bench_read_speed(c: &mut Criterion) {
     let g = Gpt::read_gpt(&mut s).unwrap();
     let p = g.get_partition_entry(&mut s, 0).unwrap();
 
-    let mut f = FatFs::<_, U16384, _>::mount(&mut s, &p,
+    let mut f = FatFs::<_, U1000000, _>::mount(&mut s, &p,
         UnmodifiedFirst::<LeastRecentlyAccessed>::default(),
     ).unwrap();
 
@@ -108,7 +108,7 @@ criterion_group!(benches, bench_read_speed);
 
 fn main() {
     std::thread::Builder::new()
-        .stack_size(1024 * 1024 * 1024)
+        .stack_size(1024 * 1024 * 1024 * 10)
         .spawn(|| {
             // let mut crit = Default::default();
             // bench_read_speed(&mut crit);
