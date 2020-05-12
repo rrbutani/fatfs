@@ -5,10 +5,12 @@ authors = ["Rahul Butani <rr.butani@gmail.com>", "jspspike <jspspike@gmail.com>"
 edition = "2018"
 publish = false
 
+
 [lib]
 # We use this in C (staticlib) and in other Rust programs (statically, so: rlib)
 crate-type = ["staticlib", "rlib"]
 # crate-type = ["staticlib"]
+
 
 [dependencies]
 typenum = "1.12.0"
@@ -22,10 +24,10 @@ log = "0.4.8"
 bare-metal = "0.2.5" # In a perfect world this'd be disabled on feat(external_mutex)
 cortex-m = "0.6.2"
 
-[profile.release]
-codegen-units = 1
-debug = true
-lto = "fat"
+
+[dev-dependencies]
+criterion = "0.3.0"
+
 
 [features]
 default = ["bindings", "no_std", "external_mutex"]
@@ -63,3 +65,37 @@ external_mutex = []
 # required-features = []
 # default-features = false
 
+[[example]]
+name = "dir"
+# default-features = false
+
+[[example]]
+name = "fat"
+# default-features = false
+
+[[example]]
+name = "gpt"
+# default-features = false
+
+
+[[bench]]
+name = "speed"
+harness = false
+# default-features = false
+
+
+[profile.release]
+codegen-units = 1
+debug = true
+lto = "fat"
+
+
+[profile.bench]
+opt-level = 3
+debug = false
+rpath = false
+lto = "fat"
+debug-assertions = false
+codegen-units = 1
+incremental = false
+overflow-checks = false
